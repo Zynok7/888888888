@@ -1,0 +1,269 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA AI — Image Generator</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #090a10;
+  --panel: #14151f;
+  --purple: #a78bfa;
+  --text: #f5f3ff;
+  --muted: #9ca3af;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+}
+header {
+  padding: 24px 20px;
+  border-bottom: 1px solid #282837;
+}
+.logo { font-size: 23px; font-weight: 900; letter-spacing: 2px; }
+.logo span { color: var(--purple); }
+header p { color: var(--muted); margin-bottom: 0; }
+main { max-width: 650px; margin: auto; padding: 20px; }
+.panel {
+  background: var(--panel);
+  padding: 18px;
+  border: 1px solid #29293a;
+  border-radius: 20px;
+  margin-bottom: 18px;
+}
+label { display: block; margin: 14px 0 8px; font-weight: 650; }
+textarea, select, input {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid #363649;
+  border-radius: 12px;
+  background: #0d0e17;
+  color: white;
+  font: inherit;
+}
+textarea { min-height: 105px; resize: vertical; }
+button {
+  border: 0;
+  border-radius: 12px;
+  padding: 15px;
+  font-size: 16px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.primary {
+  width: 100%;
+  margin-top: 16px;
+  background: linear-gradient(110deg, #8b5cf6, #c084fc);
+  color: #10091e;
+}
+button:disabled { opacity: .5; cursor: wait; }
+#status { color: var(--muted); font-size: 14px; line-height: 1.5; }
+progress { width: 100%; accent-color: var(--purple); }
+#gallery {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+.art {
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid #333344;
+  background: var(--panel);
+}
+.art img { width: 100%; display: block; }
+.art a {
+  display: block;
+  color: var(--purple);
+  padding: 14px;
+}
+.small { color: var(--muted); font-size: 12px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">NOVA <span>AI ✦</span></div>
+  <p>Deine eigene lokale Bild-KI.</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Bild erschaffen</h2>
+    <p class="small">SD-Turbo · 512 × 512 · Verarbeitung im Browser</p>
+
+    <label for="prompt">Was soll die KI zeichnen?</label>
+    <textarea id="prompt"
+      placeholder="A magical floating island above the clouds, cinematic lighting, detailed fantasy art"
+    ></textarea>
+
+    <label for="style">Bildstil</label>
+    <select id="style">
+      <option value="">Freier Stil</option>
+      <option value="photorealistic, detailed photography">Fotorealistisch</option>
+      <option value="anime illustration, vibrant colors">Anime</option>
+      <option value="digital fantasy concept art">Fantasy</option>
+      <option value="oil painting, artistic brush strokes">Ölgemälde</option>
+      <option value="pixel art, retro game aesthetic">Pixel Art</option>
+    </select>
+
+    <button class="primary" id="generate">✦ KI starten</button>
+    <p id="status" role="status">Prüfe Browser-Unterstützung …</p>
+    <progress id="progress" max="100" value="0" hidden></progress>
+  </section>
+
+  <h2>Deine Kreationen</h2>
+  <div id="gallery"></div>
+
+  <section class="panel">
+    <h3>Über NOVA</h3>
+    <p class="small">
+      Die Bildgenerierung benötigt ein kompatibles WebGPU-Gerät.
+      Beim ersten Start werden Modell-Dateien heruntergeladen.
+      Bilder werden in dieser Sitzung angezeigt. Eine Galerie über
+      mehrere Sitzungen hinweg ist noch nicht eingerichtet.
+    </p>
+  </section>
+</main>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const button = $('generate');
+const status = $('status');
+const progress = $('progress');
+const gallery = $('gallery');
+
+let api;
+let ready = false;
+let busy = false;
+
+function showProgress(event = {}) {
+  if (event.pct != null) {
+    progress.hidden = false;
+    progress.value = Math.max(0, Math.min(100, event.pct));
+  }
+  const phase = event.message || event.phase || 'Arbeite …';
+  const percent = event.pct == null ? '' : ` (${event.pct}%)`;
+  status.textContent = phase + percent;
+}
+
+async function initialize() {
+  try {
+    if (!navigator.gpu) {
+      throw new Error(
+        'WebGPU ist in diesem Browser nicht verfügbar. ' +
+        'Die lokale KI kann hier nicht gestartet werden.'
+      );
+    }
+
+    status.textContent = 'Lade KI-Bibliothek …';
+
+    api = await import(
+      'https://esm.sh/web-txt2img'
+    );
+
+    const caps = await api.detectCapabilities();
+
+    if (!caps.webgpu) {
+      throw new Error('Keine kompatible WebGPU-Unterstützung erkannt.');
+    }
+
+    status.textContent =
+      'GPU erkannt. Tippe auf „KI starten“, um das Modell zu laden.';
+    ready = true;
+  } catch (error) {
+    status.textContent = 'Hinweis: ' + error.message;
+  }
+}
+
+button.addEventListener('click', async () => {
+  if (busy) return;
+
+  const prompt = $('prompt').value.trim();
+  if (!prompt) {
+    status.textContent = 'Gib zuerst eine Bildbeschreibung ein.';
+    return;
+  }
+
+  busy = true;
+  button.disabled = true;
+  progress.hidden = false;
+  progress.value = 0;
+
+  try {
+    if (!ready) {
+      await initialize();
+    }
+    if (!ready) {
+      throw new Error(
+        'Die Bibliothek konnte nicht initialisiert werden. ' +
+        'Prüfe Browser und Internetverbindung.'
+      );
+    }
+
+    const style = $('style').value;
+    const fullPrompt = style ? `${prompt}, ${style}` : prompt;
+
+    status.textContent =
+      'Lade SD-Turbo. Beim ersten Start kann das länger dauern …';
+
+    const loaded = await api.loadModel('sd-turbo', {
+      backendPreference: ['webgpu']
+    }, showProgress);
+
+    if (!loaded?.ok) {
+      throw new Error(loaded?.message || 'Modell konnte nicht geladen werden.');
+    }
+
+    status.textContent = 'Erzeuge dein Bild …';
+
+    const result = await api.generateImage({
+      model: 'sd-turbo',
+      prompt: fullPrompt,
+      width: 512,
+      height: 512,
+      onProgress: showProgress
+    });
+
+    if (!result?.ok || !result.blob) {
+      throw new Error(result?.message || 'Bildgenerierung fehlgeschlagen.');
+    }
+
+    const url = URL.createObjectURL(result.blob);
+
+    const card = document.createElement('div');
+    card.className = 'art';
+
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = fullPrompt;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'nova-ai.png';
+    link.textContent = '⬇ Bild speichern';
+
+    card.append(img, link);
+    gallery.prepend(card);
+
+    status.textContent =
+      `Fertig! Generierungszeit: ${(result.timeMs / 1000).toFixed(1)} Sekunden.`;
+    progress.value = 100;
+
+  } catch (error) {
+    status.textContent =
+      'Fehler: ' + (error?.message || String(error));
+  } finally {
+    busy = false;
+    button.disabled = false;
+  }
+});
+
+initialize();
+</script>
+</body>
+</html>
